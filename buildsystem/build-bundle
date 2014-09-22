@@ -1,0 +1,219 @@
+#!/bin/bash
+
+## change directory to work directory and set WORK_PATH
+export OLD_PWD=${PWD}
+cd $(dirname $0)
+export WORK_PATH=$(pwd)
+export SCRIPT_NAME=$(basename $0)
+export ALL_DONE="false"
+export PATH=$PATH:/usr/sbin:/sbin
+
+[[ -f "${WORK_PATH}/common" ]] && source ${WORK_PATH}/common \
+    || echo "[ERROR] common file not exist."
+
+source_if_exists "${WORK_PATH}/${SCRIPT_NAME}.conf"
+
+# Clean the build environment
+clean_up ()
+{
+    postchroot
+    sudo umount ${CHROOT_PATH}
+    sudo rm -rf ${APP_DATA_PATH}
+}
+
+check_commandline (){
+    ACTIONS=""
+    while [ $# -gt 0 ];do
+        case "$1" in
+            -arch=*)
+                ARCH=${1##-arch=} ;;
+            -codename=*)
+                CODENAME=${1##-codename=} ;;
+            -output=*)
+                OUTPUT=${1##-outout=} ;;
+            -application=*)
+                APPLICATION=${1##-application=} ;;
+            *)
+                ACTIONS="${ACTIONS}$1 " ;;
+        esac
+        shift
+    done
+        
+}
+
+script_init (){
+    [[ "$(arch)" == "x86_64" ]] && DEFAULT_ARCH="amd64" || DEFAULT_ARCH="i386"
+    ARCH=${ARCH:-${DEFAULT_ARCH}}
+    source_if_exists "${WORK_PATH}/conf/${CODENAME}.conf"
+    source_local_if_exists "${WORK_PATH}/conf/${APPLICATION}-${CODENAME}.conf.local"
+    OUTPUT_PATH="${OUTPUT_BASE}/${APPLICATION}"
+    DEBOOTSTRAP_PATH=${STATIC_PATH}/${CODENAME}
+    APP_BUILD_BASE="${BUILD_BASE}/${APPLICATION}-${CODENAME}"
+    CHROOT_PATH="${APP_BUILD_BASE}/${APPLICATION}-${CODENAME}-union"
+    APP_DATA_PATH="${APP_BUILD_BASE}/${APPLICATION}-${CODENAME}-data"
+
+    [[ -d "${OUTPUT_PATH}" ]] || mkdir -p ${OUTPUT_PATH}
+    [[ -d "${CHROOT_PATH}" ]] || mkdir -p ${CHROOT_PATH}
+    [[ -d "${APP_DATA_PATH}" ]] || mkdir -p ${APP_DATA_PATH}
+    
+    BUNDLE_GEN_PATH="${APP_BUILD_BASE}/${APPLICATION}-bundle"
+    [[ -d "${BUNDLE_GEN_PATH}" ]] || mkdir -p ${BUNDLE_GEN_PATH}
+
+    LOG_PATH="${LOG_BASE}/${APPLICATION}"
+    LOG_TIME="$(date +%Y%m%d%H%M%S)"
+    LOG_FILE="${LOG_PATH}/${APPLICATION}-${CODENAME}-${ARCH}.log.${LOG_TIME}"
+    [[ -d "${LOG_PATH}" ]] || mkdir -p ${LOG_PATH}
+
+    echo_and_log "[BUNDLE]         ----- ISO parameters -----"
+    echo_and_log "[BUNDLE]             Application: ${APPLICATION}  "
+    echo_and_log "[BUNDLE]             Distro Arch: ${ARCH}  "
+    echo_and_log "[BUNDLE]         Distro Codename: ${CODENAME}  "
+    echo_and_log "[BUNDLE]                 Actions: ${ACTIONS}"
+}
+
+do_action (){
+    while [ $# -gt 0 ];do
+        case "$1" in
+            clean)
+                do_clean ;;
+            init)
+                do_init ;;
+            debootstrap)
+                do_debootstrap ;;
+            innerpackages)
+                do_innerpackages ;;
+            application)
+                do_application ;;
+            appsqfs)
+                do_appdata ;;
+            genbundle)
+                do_genbundle ;;
+            *)
+                echo "Unknown Action: $1"
+        esac
+        shift
+    done
+
+}
+
+
+do_debootstrap (){
+    echo_and_log "[BASE] Building base system with debootstrap ..."
+    echo_and_log "[BASE] Using local mirror: ${DEBOOTSTRAP_MIRROR}"
+    echo_and_log "[BASE] Using Codename: ${CODENAME}"
+    if [[ -d ${DEBOOTSTRAP_PATH} ]];then sudo rm -rf ${DEBOOTSTRAP_PATH};fi
+    mkdir -p ${DEBOOTSTRAP_PATH}
+    sudo debootstrap --arch=${ARCH} --include=dbus ${CODENAME} ${DEBOOTSTRAP_PATH} ${DEBOOTSTRAP_MIRROR}
+    echo "sudo debootstrap --arch=${ARCH} --include=dbus ${CODENAME} ${DEBOOTSTRAP_PATH} ${DEBOOTSTRAP_MIRROR}"
+    echo_and_log "[BASE] Build base system finished"
+}
+
+# install default packages in debootstrap
+do_innerpackages(){
+    echo_and_log "[BASE] Installing default packages in debootstrap"
+    if [[ ! -d ${DEBOOTSTRAP_PATH} ]];then do_debootstrap; fi
+    local CHROOT_PATH=${DEBOOTSTRAP_PATH}
+    prechroot
+    sudo chroot_do ${CHROOT_PATH} apt-get -y install --no-install-recommends ${DEFAULT_PACKAGES}
+    postchroot
+    echo_and_log "[BASE] Finished Installing default packages in debootstrap"
+}
+
+do_application (){
+    echo_and_log "[APPLICATION] Installing application package ..."
+    do_unionfs
+    prechroot
+    echo "${SOURCES_LIST}" | sudo tee "${CHROOT_PATH}/etc/apt/sources.list" > /dev/null
+    echo "${APT_PREFERENCES}" | sudo tee "${CHROOT_PATH}/etc/apt/preferences" > /dev/null
+    chroot_do ${CHROOT_PATH} apt-get --allow-unauthenticated update |& log
+    echo_and_log "[APPLICATION] Application is ${APPLICATION}"
+    chroot_do ${CHROOT_PATH} apt-get install \
+        -y --force-yes \
+        --allow-unauthenticated \
+        ${APPLICATION} |& log
+    postchroot
+    echo_and_log "[APPLICATION] Installation finished"
+    VERSION=$(chroot_do ${CHROOT_PATH}  dpkg -s ${APPLICATION} | grep ^Version | cut -d' ' -f 2)
+}
+
+do_clean (){
+    clean_up
+    # Need enhance it!!
+}
+
+prechroot (){
+    sudo cp /etc/hosts ${CHROOT_PATH}/etc/
+    sudo rm ${CHROOT_PATH}/etc/resolv.conf -f
+    sudo cp -L /etc/resolv.conf ${CHROOT_PATH}/etc/
+    sudo mount --bind /dev ${CHROOT_PATH}/dev
+
+    sudo chroot ${CHROOT_PATH} mount -t proc none /proc
+    sudo chroot ${CHROOT_PATH} mount -t sysfs none /sys
+    sudo chroot ${CHROOT_PATH} mount -t devpts none /dev/pts
+    sudo chroot ${CHROOT_PATH} dpkg-divert --local --rename --add /sbin/initctl | log
+    sudo chroot ${CHROOT_PATH} ln -s /bin/true /sbin/initctl | log
+
+    echo -e "#!/bin/sh\nexit 101" | sudo tee ${CHROOT_PATH}/usr/sbin/policy-rc.d | log
+    sudo chmod +x ${CHROOT_PATH}/usr/sbin/policy-rc.d
+}
+
+postchroot () {
+    sudo chroot ${CHROOT_PATH} umount /proc
+    sudo chroot ${CHROOT_PATH} umount /sys
+    sudo chroot ${CHROOT_PATH} umount /dev/pts
+
+    sudo rm -rf ${CHROOT_PATH}/tmp/* ${CHROOT_PATH}/root/.bash_history
+    sudo rm -f ${CHROOT_PATH}/etc/hosts
+    sudo rm -f ${CHROOT_PATH}/etc/resolv.conf
+    sudo umount ${CHROOT_PATH}/dev
+
+    [[ -f "${CHROOT_PATH}/sbin/initctl" ]] && sudo rm -f ${CHROOT_PATH}/sbin/initctl
+    [[ -f "${CHROOT_PATH}/usr/sbin/policy-rc.d" ]] && sudo rm -f ${CHROOT_PATH}/usr/sbin/policy-rc.d
+    sudo chroot ${CHROOT_PATH} dpkg-divert --rename --remove /sbin/initctl | log
+
+}
+
+do_init (){
+    echo_and_log "[INIT] Initialize the host system to build Bundle."
+    echo_and_log "[INIT] Installing tools need to build Bundle"
+    echo_and_log "[INIT] Tools to be installed: debootstrap squashfs-tools genisoimage lzma unionfs-fuse"
+    sudo apt-get install -y --no-install-recommends \
+        debootstrap squashfs-tools genisoimage lzma unionfs-fuse | log
+    echo_and_log "[INIT] Finished initialization :-)"
+}
+
+do_unionfs (){
+    echo_and_log "[UNIONFS]  sudo unionfs-fuse -o cow,suid,dev,allow_other ${DEBOOTSTRAP_PATH}=RO:${APP_DATA_PATH}=RW ${CHROOT_PATH}"
+    sudo unionfs-fuse -o cow,suid,dev,allow_other,nonempty ${APP_DATA_PATH}=RW:${DEBOOTSTRAP_PATH}=RO ${CHROOT_PATH}
+}
+
+do_appdata (){
+    sudo rm -rf ${APP_DATA_PATH}/var/cache
+    sudo rm -rf ${APP_DATA_PATH}/var/log
+    sudo rm -rf ${APP_DATA_PATH}/etc
+    sudo mksquashfs ${APP_DATA_PATH} ${BUNDLE_GEN_PATH}/app.sqfs -comp xz | log
+    sudo touch ${BUNDLE_GEN_PATH}/PKGINFO
+    sudo touch ${BUNDLE_GEN_PATH}/${APPLICATION}-${VERSION}.desktop
+}
+
+do_genbundle (){
+    VERSION='1.1.1-1'
+    echo "genisoimage -D -r -V "${APPLICATION}-${VERSION} Bundle" -cache-inodes -J -l \
+        -input-charset utf-8 \
+        -o ${OUTPUT_PATH}/${APPLICATION}-${VERSION}-${ARCH}-${CODENAME}.cb ${BUNDLE_GEN_PATH}/"
+    genisoimage -D -r -V "${APPLICATION}-${VERSION}" -cache-inodes -J -l \
+        -input-charset utf-8 \
+        -o ${OUTPUT_PATH}/${APPLICATION}-${VERSION}-${ARCH}-${CODENAME}.cb ${BUNDLE_GEN_PATH}/ |& log
+}
+
+set -u -e -o pipefail
+trap exit_fail ERR TERM EXIT KILL
+check_commandline $*
+
+script_init
+do_action ${ACTIONS}
+echo_and_log "[BUNDLE] See log for more details: ${LOG_FILE}"
+
+clean_up
+
+export ALL_DONE="true"

@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=com.linuxdeepin.bundle.modulehelper
+Exec=/usr/libexec/bundle_module_helper
+User=root

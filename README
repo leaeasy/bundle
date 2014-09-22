@@ -1,0 +1,35 @@
+-------------------------
+  |
+  |-- PKGINFO
+  |
+  |-- *.Desktop
+  |
+  |-- Icons/
+  |
+  |-- Mime/
+
+
+#PKGINFO:
+
+verison=
+release=
+description=
+url=
+packager=
+name=
+desktop=et.desktop;wpt.desktop;
+icon=et.png;wpt.png;
+exec=/usr/bin/et;/usr/bin/wpt;
+chroot=<bool>
+pkgz=
+env=
+
+#desktop <- /usr/share/applications/*.desktop
+  |
+  |
+  |-#cache/*.desktop
+    exec=$HOME/.cinstall/launchers/exec (%U)
+    icon=$HOME/.cinstall/icons/
+
+#launchers
+cinstall $HOME/.cinstall/repo/*.cb (--run=/usr/bin/*) "${@}"

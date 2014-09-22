@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-cb-bundle">
+    <comment>LinuxDeepin Software Bundle</comment>
+    <acronym>CB</acronym>
+    <expanded-acronym>LinuxDeepin Bundle</expanded-acronym>
+    <generic-icon name="x-cb-bundle"/>
+    <glob pattern="*.cb"/>
+  </mime-type>
+</mime-info>

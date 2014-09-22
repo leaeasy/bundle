@@ -1,0 +1,6 @@
+# export something in special packages
+export SOURCES_LIST="
+deb http://packages.linuxdeepin.com/ubuntu saucy main restricted universe multiverse
+deb http://packages.linuxdeepin.com/ubuntu saucy-updates main restricted universe multiverse
+deb http://packages.linuxdeepin.com/ubuntu saucy-security main restricted universe multiverse
+"

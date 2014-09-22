@@ -1,0 +1,62 @@
+exit_fail ()
+{
+    if [ "$ALL_DONE" == "true" ]; then exit 0; fi
+    echo_and_log "[ERROR] Build failed, see log file for more details: ${LOG_FILE}"
+    clean_up
+    exit 1
+}
+
+exit_with_msg ()
+{
+    echo_and_log "[ERROR] $1"
+    exit_fail
+}
+
+source_if_exists ()
+{
+    if [[ "$1" == "-exec" ]]; then
+        EXEC="bash"
+        shift
+    else
+        EXEC="source"
+    fi
+    if [ -f "$1" ]; then ${EXEC} "$1";fi
+}
+
+source_local_if_exists ()
+{
+    if [[ "$1" == "-exec" ]]; then
+        source_if_exists --exec "$2.local"
+    else
+        source_if_exists "$1.local"
+    fi
+}
+
+chroot_do ()
+{
+    CHROOT=$1
+    shift
+    sudo chroot "$CHROOT" /usr/bin/env =i \
+        HOME=/root \
+        USERNAME=root \
+        USER=root \
+        LOGNAME=root \
+        LC_ALL=C \
+        PATH=/sbin:/bin:/usr/sbin:/usr/bin \
+        DEBIAN_FRONTEND=noninteractive \
+        "$@"
+}
+
+log ()
+{
+    [[ $# -gt 0 ]] \
+        && echo "$*" | tee -a ${LOG_FILE} \
+            || tee -a ${LOG_FILE}
+}
+
+echo_and_log ()
+{
+    [[ $# -gt 0 ]] \
+        && echo "[$(date +%H:%M:%S)] $*" | tee -a ${LOG_FILE} \
+            || tee -a ${LOG_FILE}
+}
